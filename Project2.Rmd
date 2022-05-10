@@ -1,0 +1,245 @@
+---
+title: "Project 2"
+author: "Alex Mercadel"
+date: "4/30/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Project 2: Do current NBA Hall of Famers deserve their spots?
+
+
+## Introduction
+Basketball discourse on the internet is famously toxic (albeit fun to interact with). Some people are very strong proponents of using statistics to analyze players, while others prefer to rely on their own knowledge and expertise to analyze the game. Personally, I think that the former camp is more correct, but as I need some kind of topic to do this project on, I will be analyzing Hall of Famers using data. After trying for a while to find a dataset revolving around NBA Hall of Famers for Project 1, I decided to use a more accessible database, but for this project, I decided to take the hard route and actually find a Hall of Fame dataset. I found a group on Github that had a similar goal; they had used web-scraping in Python to grab the data from the exact same source I was having issues gathering from [https://surmud.github.io/NBA-Hall-of-fame-predictor/]. After using some of their code to fit what I needed, I was able to write a pandas dataframe to a csv, then import it into R. I am expecting PPG to correlate with either RPG or APG, depending on the player's position. There is an extra column in the dataset that needs to be excluded. I then made my own dataset by using data from [https://www.basketball-reference.com/]. There is also the problem of the recording of blocks and assists and the three point shot. The NBA did not start recording blocks and steals in an official capacity until the 1973-74 season, and the three-point line was not added to the court until 1979. Therefore, as many of these players played their entire careers before these years, they will be missing these statistics, which I will have to take care to manage when I begin to analyze the data.
+
+## EDA
+```{r message=FALSE, warning=FALSE}
+# package loading
+library(tidyverse, warn.conflicts = F)
+library(PerformanceAnalytics)
+library(factoextra)
+library(cluster)
+library(plotROC)
+library(caret)
+library(ggrepel)
+```
+
+
+```{r message = FALSE, warning = FALSE}
+
+hof_data <- read_csv("hof_df.csv")
+
+hof_data <- hof_data %>%
+  select(-"...1")
+
+current_data <- read_csv("current_players_career_avg.csv") # statistics of current NBA players, top 50 current career scorers in the league right now
+
+# tidying for analysis
+current_data <- current_data %>%
+  mutate(`FG%` = `FG%` / 100) %>%
+  rename(Name = Player) %>%
+  select(c(Name, PTS, TRB, AST, `FG%`, `FT%`, WS))
+
+hof_data <- hof_data %>%
+  select(c(Name, PTS, TRB, AST, `FG%`, `FT%`, WS))
+
+# found one data point that is missing a column, so I will throw it out
+
+hof_data <- hof_data %>%
+  filter(!is.na(TRB))
+
+# adding a hall of fame indicator column
+
+hof_data["hof"] = 1
+current_data["hof"] = 0
+
+current_data <- current_data %>%
+  mutate(`FT%` = `FT%` / 100)
+
+# joining the tables
+
+complete_data <- hof_data %>%
+  full_join(current_data)
+
+
+
+```
+
+The statistics included in the dataset are as follows: year of induction (Year), points per game (PTS), total rebounds per game (TRB), assists per game (AST), field goal percentage (FG%), three-point percentage (3P%), win shares (WS), and win shares per 48 minutes (WS/48). Win shares are a statistc that is designed to give individual players credit for team success, and can be divided into offensive and defensive win shares; however, this dataset uses combined win shares, which is good for representing a players overall value to a team.
+
+
+First, I'm going to get some basic correlation statistics for the individual datasets:
+```{r}
+
+# individual datsets
+hof_data %>%
+  select(-hof) %>%
+  select_if(is.numeric) %>%
+  cor()
+
+current_data  %>%
+  select(-hof) %>%
+  select_if(is.numeric) %>%
+  cor()
+
+```
+Correlation for the combined dataset:
+```{r}
+
+complete_data %>%
+  select(-hof) %>%
+  select_if(is.numeric) %>%
+  cor()
+
+complete_data %>%
+  select(-hof) %>%
+  select_if(is.numeric) %>%
+  chart.Correlation()
+  
+
+```
+
+There seems to be a relatively strong positive correlation between win shares and points per game, which makes sense, as players need to score points to win games, and the more a player scores, the more likely their team is to win. There also is an interesting negative correlation between free throw percentage and rebounds per game. This may not make sense on the surface for the uninitiated, but there does exist a general negative correlation between height and free throw shooting ability. Taller players are also much better at grabbing rebounds, so the negative correlation between rebounding and free throw shooting has a basis in reality. For example, all-time great Shaquille O'Neal stands at a towering 7'2 and grabbed 11 rebounds per game, but shot an abysmal 52% from the free throw line in his career. 
+
+One interesting note is that many of the categories do not correlate strongly with year, indicating that the general quality of players being inducted into the Hall of Fame since its inception. One major exception, however, is field goal percentage. One possible explanation for this could be that as the three point line was implemented in 1979 and grew in importance, the best players in the league became better shoes. Despite this, it would be erroneous to apply this logic to today's three point shooting heavy game, as many of the players that ushered in these changes have not yet retired. 
+
+## Clustering and Dimensionality Reduction
+
+### Clustering
+```{r}
+
+data_scaled <- complete_data %>% # scaling my numeric variables so that that I can run my PAM algorithm
+  select_if(is.numeric) %>%
+  scale
+
+fviz_nbclust(data_scaled, pam, method = "silhouette") # finding silhouette width
+
+pam_data <- data_scaled %>% # going based off of silhouette width
+  pam(3)
+
+pam_data_2 <- data_scaled %>% # going based off how many groupings I am expecting
+  pam(2)
+
+
+# visualizing my clusters
+fviz_cluster(pam_data, data = data_scaled)
+fviz_cluster(pam_data_2, data = data_scaled)
+
+
+
+
+```
+
+When I calculated the number of clusters using the silhouette width, it called for 3 clusters. However, these clusters were haphazard and overlapped quite a bit. Since I knew I was looking for 2 clusters, I also plotted the clusters for 2 clusters. This gave a result that looked to make more sense. Two of the clusters overlap quite a bit (almost entirely), so I feel that two clusters may actually be more important.
+
+
+### Dimensionality Reduction
+```{r}
+
+pca <- data_scaled %>%
+  prcomp() # creating my prinicipal coordinate analysis
+
+fviz_eig(pca, addlabels = TRUE, ylim = c(0, 40)) # gives percentage variance explained 
+
+
+```
+
+The first two components account for 56.62% of the variance in my dataset, and it takes 4 components to explain 80% of the variance.
+
+```{r}
+
+# finding which variables explain the most of the top 4 components
+fviz_contrib(pca, choice = "var", axes = 1, top = 5) # on PC1
+fviz_contrib(pca, choice = "var", axes = 2, top = 5) # PC2
+fviz_contrib(pca, choice = "var", axes = 3, top = 5) # PC3
+fviz_contrib(pca, choice = "var", axes = 4, top = 5) # PC4
+
+```
+
+The top contributors to each component were total rebounds, points, hall of fame status, and assists, respectively. 
+
+```{r}
+
+fviz_pca_var(pca, col.var = "black", 
+             repel = TRUE) # Avoid text overlapping
+```
+
+From this plot, it can be noted that TRB, WS, PTS, hof, and FG% all contribute negatively to dimension 1, while AST and FT% contribute positively. FG%, WS, PTS, AST, and FT% contribute positively to dimension 2, while TRB and hof contribute negatively. 
+```{r}
+
+fviz_pca_biplot(pca, col.ind = as.factor(complete_data$hof))
+get_eigenvalue(pca)
+
+```
+
+Scoring very negatively on PC1 means that a player is an excellent rebounder, contributes a lot of win shares, and shoots at a relatively high field goal percentage. However, scoring very high on PC2 means that a player scores a lot, gives a lot of assists, and shoots free throws at a high percentage. An example of a player that scores very negatively on PC1 is Wilt Chamberlain, denoted by number 16 on the plot (30.1 PTS, 22.9 TRB, 4.4 AST, 0.540 FG%, 0.511 FT%, 247.3 WS). A player that performs exceptionally well on PC2 is LeBron James, denoted by number 144 (27.13 PTS, 7.5 TRB, 7.1 AST, 0.505 FG%, 0.734 FT%, 249.52 WS). On the other hand, a player that scored very negatively is Ben Wallace (138), who despite rather lackluster career stats, is a hall of famer (5.70 PTS, 9.6 TRB, 1.3 AST, 0.474 FG%, 0.414 FG%, 93.50 WS). While this may seem counterintuitive, one must account for the variables that were dropped, as Ben Wallace, who was an excellent defensive player, suffers from these dropped variables. 
+
+## Classification and Cross-validation
+
+
+
+```{r}
+
+knn_fit <- knn3(factor(hof == 1, 
+                       levels = c("TRUE", "FALSE")) ~ PTS + TRB + AST + WS, 
+                data = complete_data, 
+                k = 5)
+
+kNN_data <- complete_data %>% 
+  mutate(score = predict(knn_fit, complete_data)[,1],
+         predicted = ifelse(score < 0.7, 0, 1)) %>%
+  select(Name, PTS, TRB, AST, WS, hof, predicted)
+
+ROC <- ggplot(kNN_data) +
+  geom_roc(aes(d = hof, m = predicted), n.cuts = 0)
+
+ROC
+
+calc_auc(ROC)
+```
+
+
+```{r}
+
+set.seed(322) # set seed for reproducibility
+# doing a 10 fold cross validation using k-nearest neighbor
+
+# Randomize dataset
+data <- complete_data[sample(nrow(complete_data)), ] 
+
+# Create 10 folds from the dataset
+folds <- cut(seq(1:nrow(data)), breaks = 10, labels = FALSE) 
+
+# Use a for loop to get diagnostics for each test set
+diags_knn <- NULL
+
+for(i in 1:10){
+  train <- data[folds != i, ] # creating training set
+  test <- data[folds == i, ]  # creating test set
+  
+  # Train model
+  knn_fit_validation <- knn3(factor(hof == 1, 
+                       levels = c("TRUE", "FALSE")) ~ PTS + TRB + AST + WS, 
+                data = complete_data, 
+                k = 5)
+  
+  # Test model on test set
+  kNN_data_validation <- test %>% 
+    mutate(proportion = predict(knn_fit_validation, test)[,1])
+  # create ROC curve
+  ROCplot <- ggplot(kNN_data_validation) + geom_roc(aes(d = hof, m = proportion), n.cuts = 0)
+ 
+  # get AUC to estimate model accuracy 
+  diags_knn[i] <- calc_auc(ROCplot)$AUC
+}
+
+diags_knn # get AUC for each set
+mean(diags_knn) # find mean AUC
+var(diags_knn) # variance in performance
+```
+
+With an average AUC of 0.851, the model seems to perform reasonably well, however, there is a consequential amount of variance in the performance, so there may be some overfitting in this model. Some trials perform perfectly, while others  perform with less than 65% accuracy. Therefore, this model could use some improving. One way to improve this would be to add both more variables and more players. Not including defensive statistics in this analysis, while convenient, causes us to miss out on key insights of what makes players worthy of the hall of fame. One must also consider that these statistics do not take into account non-basketball factors that may account for a player's induction into the hall of fame, such as cultural impact or non-basketball contributions to the game. Some of these things are not even quantifiable. In conclusion, doubtless, a better model could be made, but a perfect model may be out of reach. 
+

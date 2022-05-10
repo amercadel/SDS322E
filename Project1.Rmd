@@ -1,0 +1,203 @@
+---
+title: "Project1"
+author: "Alex Mercadel"
+date: "3/19/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+## Packages
+```{r}
+library(tidyverse, warn.conflicts = F)
+library(knitr)
+```
+
+## Loading in data
+```{r}
+stats_1819 <- read_csv("NBA_pergame_1819.csv")
+stats_1920 <- read_csv("NBA_pergame_1920.csv")
+stats_2021 <- read_csv("NBA_pergame_2021.csv")
+```
+The data was collected from https://www.basketball-reference.com/, a website that hosts a database for statistics, scores, and history for the NBA, ABA, WNBA, and top European competitions. Per game totals for the 2018-2019, 2019-2020, and 2020-2021 seasons were downloaded as excel files, then converted to csv files to be loaded into R. 
+
+
+## Data Cleaning and Wrangling
+
+1. Some of the column names are uninformative for someone who is not a basketball fan
+2. Some players have multiple rows if they played for more than one team in the season
+
+Problem 1: Uninformative column names
+```{r}
+stats_1819 <- stats_1819 %>%
+  rename("games_played" = G) %>%
+  rename("games_started" = GS) %>%
+  rename("min_pg" = MP)
+
+stats_1920 <- stats_1920 %>%
+  rename("games_played" = G) %>%
+  rename("games_started" = GS) %>%
+  rename("min_pg" = MP)
+
+stats_2021 <- stats_2021 %>%
+  rename("games_played" = G) %>%
+  rename("games_started" = GS) %>%
+  rename("min_pg" = MP)
+  
+```
+
+
+Problem 2: multiple rows for players
+- According to the NBA website, a player must play in 70% of their team's games in order to qualify for league leader in a statistical category
+- For the 18-19 season, this is 57 games (for an 82 game season) and for the 20-21 season, this is 50 games (for a 72 game season)
+- The 19-20 season is a little trickier, because the season was interrupted due to the outbreak of COVID-19. Teams had played between 63 and 67 games before the season was suspended, then only 22 of the NBA's 30 teams played 8 games in a bubble for a total of 71 to 75 games 
+- Thus, the minimum will be set to 70 percent of 63 games, as it would be unfeasible to go through and manually have different cutoffs for different players: 44 games
+- For players that played multiple games, they have separate rows for each team they played for, plus a total row. It seems most logical to just include their total stats.
+
+```{r}
+stats_1819 <- stats_1819[!duplicated(stats_1819$Player), ] %>% # gets rid of duplicates, since TOT comes first, if there is a TOT, it gets kept, and the actual teams are deleted
+  filter(games_played >= 57)
+
+stats_1920 <- stats_1920[!duplicated(stats_1920$Player), ] %>%
+  filter(games_played >= 44)
+
+stats_2021 <- stats_2021[!duplicated(stats_2021$Player), ] %>%
+  filter(games_played >= 50)
+
+```
+
+
+
+##Tidying the Data
+
+```{r}
+
+final_table_1 <- stats_1819 %>%
+  select(Pos, min_pg, games_played, Tm, Player, games_started, Age)
+
+final_table_1 <- final_table_1 %>%
+  mutate("Year" = "18-19")
+
+final_table_2 <- stats_1920 %>%
+  select(Pos, min_pg, games_played, Tm, Player, games_started, Age)
+
+final_table_2 <- final_table_2 %>%
+  mutate("Year" = "19-20")
+
+final_table_3 <- stats_2021 %>%
+  select(Pos, min_pg, games_played, Tm, Player, games_started, Age)
+
+final_table_3 <- final_table_3 %>%
+  mutate("Year" = "20-21")
+
+joined_table <- final_table_1 %>%
+  full_join(final_table_2, by = "Year" ) %>%
+  full_join(final_table_3, by = "Year")
+
+joined_table <- joined_table %>%
+  unite(Pos, c(Pos, Pos.x, Pos.y), sep = "")
+joined_table$Pos <- gsub("NA", "", as.character(joined_table$Pos))
+
+joined_table <- joined_table %>%
+  unite(Age, c(Age, Age.x, Age.y), sep = "")
+joined_table$Age <- gsub("NA", "", as.character(joined_table$Age))
+
+joined_table <- joined_table %>%
+  unite(Player, c(Player, Player.x, Player.y), sep = "")
+joined_table$Player <- gsub("NA", "", as.character(joined_table$Player))
+
+joined_table <- joined_table %>%
+  unite(Tm, c(Tm, Tm.x, Tm.y), sep = "")
+joined_table$Tm <- gsub("NA", "", as.character(joined_table$Tm))
+
+joined_table <- joined_table %>%
+  unite(min_pg, c(min_pg, min_pg.x, min_pg.y), sep = "")
+joined_table$min_pg <- gsub("NA", "", as.character(joined_table$min_pg))
+
+joined_table <- joined_table %>%
+  unite(games_started, c(games_started, games_started.x, games_started.y), sep = "")
+joined_table$games_started <- gsub("NA", "", as.character(joined_table$games_started))
+
+joined_table <- joined_table %>%
+  unite(games_played, c(games_played, games_played.x, games_played.y), sep = "")
+joined_table$games_played <- gsub("NA", "", as.character(joined_table$games_played))
+
+joined_table$Age <- as.numeric(joined_table$Age)
+joined_table$min_pg <- as.numeric(joined_table$min_pg)
+joined_table$games_started <- as.numeric(joined_table$games_started)
+joined_table$games_played <- as.numeric(joined_table$games_played)
+
+```
+
+
+
+##Computing Summary Statistics
+
+```{r}
+stats_for_positions <- joined_table %>%
+  group_by(Pos) %>%
+  summarize(players_per_position = n(), "Proportion of Total Players" = (players_per_position/sum(length(joined_table))))
+
+stats_for_teams <- joined_table %>%
+  group_by(Tm) %>%
+  summarize(Players_per_Team = n(), "Proportion of Total Players" = (Players_per_Team/sum(length(joined_table))))
+
+stats_for_age <- joined_table %>%
+  summarize(Mean = mean(Age), "Standard Deviation" = sd(Age), Maximum = max(Age), Minimum = min(Age), Range = Maximum - Minimum, Median = median(Age))
+
+stats_for_min_pg <- joined_table %>%
+  summarize(Mean = mean(min_pg), "Standard Deviation" = sd(min_pg), Maximum = max(min_pg), Minimum = min(min_pg), Range = Maximum - Minimum, Median = median(min_pg))
+
+stats_for_games_played <- joined_table %>%
+  summarize(Mean = mean(games_played), "Standard Deviation" = sd(games_played), Maximum = max(games_played), Minimum = min(games_played), Range = Maximum - Minimum, Median = median(games_played))
+
+continuous_summary <- stats_for_age %>%
+  rbind(stats_for_games_played) %>%
+  rbind(stats_for_min_pg) %>%
+  add_column(Statistic = c("Age", "Games Played", "Minutes per Game   "), .after = 0)
+
+kable(continuous_summary, digits = round(3))
+```
+
+##Data Visualization: Plot 1
+
+```{r}
+#Analyze data for the different positions in basketball
+players_per_position_stats <- joined_table %>%
+  group_by(Pos) %>%
+  summarize(players_per_position = n(),
+           mean_games_per_position = sum(games_played)/(players_per_position),
+           "Standard Deviation of Games Played Per Position" = sd(games_played), 
+           "Max Amount of Time Played" = max(min_pg), 
+           "Min Amount of Time Played" = min(min_pg))
+
+
+players_per_position_stats %>%
+  ggplot(aes(y = mean_games_per_position, x = Pos, fill= "orange")) + 
+  geom_bar(stat = "identity") + 
+  labs(x = "Positions", y = "Average Number of Games", title = "Average Number of Games Per Position") + 
+  heme_bw() + 
+  ylim(0, 80) +  #changes scale for y axis
+  theme(legend.position = "none") #legend was unnecessary
+```
+This graph gives a distribution of the average number of games per season played based on the position or combination of positions that a player plays. While it may appear that there are duplicates, the order of the combination positions matters, as the first position is their primary position. Players that have multiple positions typically play as much or more than players that only play one position, reflecting the value that their versatility contributesto their team. 
+
+
+##Data Visualization: Plot 2
+
+```{r}
+#Graph depicting statistics for players per position (three bar graphs... one for each year, showing the mean games per position with standard deviation bars)
+joined_table <- joined_table %>%
+  mutate(total_min_played = min_pg * games_played) # generates total minutes played for a season
+joined_table %>%
+  ggplot(aes(x = Age, y = total_min_played, color = Tm, shape = Year)) + 
+  geom_point() +  #scatter plot
+  theme_classic() + 
+  labs(y = "Total Time Played", title = "Relationship Between Age of Players and Time Played By Team", color = "Team") + # changes titles, axes titles, legend
+  scale_y_continuous("Total Minutes Played (in minutes)", breaks = c(0, 500, 1000, 1500, 2000, 2500, 3000, 3500)) + #y scaling
+  scale_x_continuous("Age (in years)", limits = c(18, 45), breaks = c(20, 25, 30, 35, 40)) + # x scaling
+  theme(legend.key.size = unit(.25, "cm")) # change size of legend
+  
+```
+This graph plots age against amount of minutes played for a player in a season, with the color of the dot representing the team the player played for and the shape of the representing the year. The is much variety in the amount of minutes a player plays from the beginning of a player’s career until around the age of 35. After the age of 35, there is a drop off in minutes played for players that are still playing at that age, reflecting their loss of athletic prowess as their bodies decline. It thus matches the typical maxim that, in some ways, older players are less valuable to their team as their bodies decline. 
